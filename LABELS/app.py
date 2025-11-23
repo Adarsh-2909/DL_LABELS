@@ -4,7 +4,7 @@ import io
 
 app = Flask(__name__)
 
-# --- 1. FRONT-END TEMPLATE ---
+# --- 1. FRONT-END TEMPLATE (HTML stored as a string) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -43,14 +43,14 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- 2. CORE DATA PROCESSING LOGIC ---
+# --- 2. CORE DATA PROCESSING LOGIC (MODIFIED FOR NEW REQUIREMENTS) ---
 def process_excel_data(file_content_bytes):
     all_data = []
 
     try:
         xls_file = pd.ExcelFile(io.BytesIO(file_content_bytes))
     except Exception as e:
-        return f"Error reading file. Details: {e}"
+        return f"Error reading file. Is it a valid Excel format? Details: {e}"
 
     for sheet_name in xls_file.sheet_names:
         df = xls_file.parse(sheet_name).dropna(how='all')
@@ -69,24 +69,28 @@ def process_excel_data(file_content_bytes):
         for value in df_d['Extracted_Words']:
             value = value.strip()
 
-            # RULE 1: Remove text after colon
+            # --- RULE 1: Remove anything after colon ---
             if ":" in value:
                 value = value.split(":")[0].strip()
 
-            # Split by comma
+            # Split by comma after colon removal
             parts = [p.strip() for p in value.split(",") if p.strip()]
 
             for p in parts:
-                # RULE 2: Handle "X to Y" patterns
+                # --- RULE 2: Detect "X to Y" pattern ---
                 if " to " in p:
                     try:
+                        # Extract prefix (letters)
                         prefix = "".join([c for c in p if not c.isdigit()]).replace("to", "").strip()
+
+                        # Extract numbers from "1 to 10"
                         nums = p.split("to")
                         start = int(nums[0].split()[-1])
                         end = int(nums[1])
 
                         for num in range(start, end + 1):
                             processed_list.append(f"{prefix} {num}".strip())
+
                     except:
                         processed_list.append(p)
                 else:
@@ -96,10 +100,10 @@ def process_excel_data(file_content_bytes):
         all_data.append(df_exploded)
 
     if not all_data:
-        return "No valid data found in Column D."
+        return "No processable data found in any sheet with a Column D."
 
     final_df = pd.concat(all_data, ignore_index=True)
-    final_df.sort_values(by='Extracted_Words', inplace=True)
+    final_df.sort_values(by='Extracted_Words', ascending=True, inplace=True)
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -109,22 +113,22 @@ def process_excel_data(file_content_bytes):
     return output
 
 
-# --- 3. ROUTES ---
+# --- 3. FLASK WEB ROUTES ---
 @app.route('/')
 def index():
     return HTML_TEMPLATE
 
-
 @app.route('/process', methods=['POST'])
 def process_file():
     if 'excel_file' not in request.files or request.files['excel_file'].filename == '':
-        return "Error: No file uploaded.", 400
+        return "Error: No file selected or file part missing.", 400
 
-    file_bytes = request.files['excel_file'].read()
+    file = request.files['excel_file']
+    file_bytes = file.read()
     processed_output = process_excel_data(file_bytes)
 
     if isinstance(processed_output, str):
-        return processed_output, 400
+        return f"Processing Failed: {processed_output}", 400
 
     return send_file(
         processed_output,
@@ -132,7 +136,6 @@ def process_file():
         as_attachment=True,
         download_name='processed_column_D_sorted_data.xlsx'
     )
-
 
 if __name__ == '__main__':
     app.run(debug=True, port=9000)
